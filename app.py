@@ -1250,6 +1250,86 @@ def compute_roi_binary(
     roi = total_profit / n_bets
 
     return roi, n_bets
+def render_landing_page():
+    st.markdown("""
+    <div style='text-align:center; padding: 15px 0;'>
+        <h1 style='margin-bottom:0;'>⚡ GOALMIND PRO</h1>
+        <p style='font-size:17px; color:#6b7280;'>Poisson • Dixon–Coles • AI • Kelly • Value Bets</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # HOW TO USE SECTION
+    st.subheader("📘 How to Use GOALMIND PRO")
+
+    st.markdown("""
+    **GOALMIND PRO is built for bettors, analysts, and football data users who want fast, accurate and automated insights.  
+    Follow this short guide to use it effectively:**
+
+    ### 🔹 1. Overview (Main Dashboard)
+    - See **overall accuracy** (Poisson vs AI)
+    - See league summaries
+    - Compare AI vs Poisson model performance  
+    This tab gives the *global strength* of your system.
+
+    ### 🔹 2. FT 1X2 Predictions
+    - Poisson FT 1X2 probabilities  
+    - AI FT 1X2 probabilities  
+    - Fair odds and model confidence  
+    **Use this tab to compare two systems and confirm the signal.**
+
+    ### 🔹 3. Goals Predictions (OU & BTTS)
+    - Poisson OU 2.5 and BTTS  
+    - AI OU 2.5 and BTTS  
+    - Combined xG prediction  
+    **Great for totals bettors and over/under specialists.**
+
+    ### 🔹 4. Fixtures & Value Bets
+    - Upcoming fixtures  
+    - Bookmaker odds (from Football-Data)  
+    - Poisson + AI fair odds  
+    - Edges (value) & Kelly stakes  
+    - Automatic **Recommended Bet** + **Risk Level**  
+    This is the main *money-making* tab.
+
+    ### 🔹 5. Excel PRO Export
+    - Generate a clean, professional Excel dashboard  
+    - Includes:
+        * Fixtures sheet  
+        * Sections, filters, formatting  
+        * Best Bets sheet  
+        * Formulas and highlighting  
+    Ideal if you sell the model or send results to clients.
+
+    ---
+
+    ### 💡 Tips for Best Use
+    - Combine **AI + Poisson** → strongest confirmation  
+    - Look for **edge ≥ 5%** (green cells)  
+    - Use **Kelly ≥ 0.03** for medium/high confidence bets  
+    - Follow only **LOW / MEDIUM / HIGH** rated picks  
+    - Avoid “No Bet” matches unless manually reviewing xG & stats
+
+    ---
+
+    ### 🔒 Membership Access
+    If you're seeing this screen, you already passed the login protection.  
+    Share your Streamlit Cloud link to clients — they log in with password and get full access.
+
+    ---
+
+    ### 🧑‍💻 Support
+    For issues or improvements, contact admin or send GitHub issue.
+    """)
+
+    st.markdown("---")
+
+    st.markdown(
+        "<p style='text-align:center; color:#9ca3af;'>© 2025 GOALMIND PRO – Football Predictions Engine</p>",
+        unsafe_allow_html=True
+    )
+
 
 # -------------------------------
 # STREAMLIT APP
@@ -1515,14 +1595,20 @@ def main():
 
     st.markdown("---")
 
-    # Tabs
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    # Tabs – dodali smo LANDING kao prvi tab
+    tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "🔑 Landing & Pricing",
         "🏠 Overview",
         "🎯 FT 1X2 (details)",
         "🥅 Goals OU/BTTS (details)",
         "🔮 Fixtures & value bets",
         "📥 Excel export",
     ])
+
+
+    # TAB 0 – Landing & pricing
+    with tab0:
+        render_landing_page()
 
     # TAB 1 – Overview
     with tab1:
@@ -1879,5 +1965,4 @@ def main():
 if __name__ == "__main__":
     if check_password():
         main()
-
 
