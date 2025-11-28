@@ -17,18 +17,75 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.formatting.rule import CellIsRule
 
 
-import gdown
-import os
-import pickle
 
-# Google Drive IDs – sa tvojih linkova
+import os
+from io import BytesIO, StringIO
+from typing import Dict, List, Tuple
+
+import numpy as np
+import pandas as pd
+import requests
+import joblib
+import streamlit as st
+from math import exp, factorial
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from openpyxl.utils import get_column_letter
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from openpyxl.formatting.rule import CellIsRule
+
+# NEMA VIŠE gdown-a ❌
+# import gdown  -> maknuti ako još stoji
+import pickle  # može ostati, ali ti realno više ni ne treba
+
+# Google Drive IDs – tvoji linkovi
 GDRIVE_ID_AI_1X2 = "1mgbkAo6p7vo9syYQpkV3uOgX_UsCwJ0i"
 GDRIVE_ID_AI_GOALS = "1KifFjTHCqD7_E64O0SZXxfkfMMiPGgpL"
 
-def download_from_gdrive(file_id, output_path):
-    """Download model file from Google Drive."""
-    url = f"https://drive.google.com/uc?id={file_id}"
-    gdown.download(url, output_path, quiet=False)
+def download_from_gdrive(file_id: str, output_path: str):
+    """
+    Jednostavan download s Google Drive-a preko requests.
+    Radi i na Streamlit Cloud-u.
+    """
+    url = f"https://drive.google.com/uc?export=download&id={file_id}"
+    try:
+        resp = requests.get(url, timeout=60)
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[ERR] Google Drive download failed for {file_id}: {e}")
+        return False
+
+    try:
+        with open(output_path, "wb") as f:
+            f.write(resp.content)
+        print(f"[OK] Downloaded {output_path} from Google Drive.")
+        return True
+    except Exception as e:
+        print(f"[ERR] Saving file failed {output_path}: {e}")
+        return False
+
+
+def ensure_model_files():
+    """
+    Provjerava da postoje model fajlovi u /models.
+    Ako ne postoje – skida ih s Google Drive-a.
+    """
+    os.makedirs("models", exist_ok=True)
+
+    model_1x2_path = os.path.join("models", "ai_1x2_model.pkl")
+    goals_model_path = os.path.join("models", "ai_goals_models.pkl")
+
+    if not os.path.exists(model_1x2_path):
+        print("[INFO] ai_1x2_model.pkl not found – downloading from Google Drive...")
+        ok = download_from_gdrive(GDRIVE_ID_AI_1X2, model_1x2_path)
+        if not ok:
+            print("[WARN] Could not download ai_1x2_model.pkl")
+
+    if not os.path.exists(goals_model_path):
+        print("[INFO] ai_goals_models.pkl not found – downloading from Google Drive...")
+        ok = download_from_gdrive(GDRIVE_ID_AI_GOALS, goals_model_path)
+        if not ok:
+            print("[WARN] Could not download ai_goals_models.pkl")
+
 
 # ----------------------
 # SIMPLE PASSWORD LOGIN
@@ -1427,6 +1484,27 @@ def main():
     st.set_page_config(page_title="GOALMIND PRO – Poisson + AI", layout="wide")
 
     inject_pro_css()
+
+    def main():
+        st.set_page_config(page_title="GOALMIND PRO – Poisson + AI", layout="wide")
+
+        inject_pro_css()
+
+        # 🔹 OVDJE DODAJ:
+        ensure_model_files()
+
+        st.markdown(
+            """
+            <div class="hero">
+                <div class="hero-title">⚡ GOALMIND PRO – Poisson + AI</div>
+                <div class="hero-subtitle">
+                    Multi-league model for FT 1X2, Over/Under 2.5 and BTTS with Poisson + AI + Kelly logic – ready for personal use or a PRO subscription service.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        ...
 
     st.markdown(
         """
