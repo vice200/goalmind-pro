@@ -16,7 +16,19 @@ from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.formatting.rule import CellIsRule
 
-import streamlit as st
+
+import gdown
+import os
+import pickle
+
+# Google Drive IDs – sa tvojih linkova
+GDRIVE_ID_AI_1X2 = "1mgbkAo6p7vo9syYQpkV3uOgX_UsCwJ0i"
+GDRIVE_ID_AI_GOALS = "1KifFjTHCqD7_E64O0SZXxfkfMMiPGgpL"
+
+def download_from_gdrive(file_id, output_path):
+    """Download model file from Google Drive."""
+    url = f"https://drive.google.com/uc?id={file_id}"
+    gdown.download(url, output_path, quiet=False)
 
 # ----------------------
 # SIMPLE PASSWORD LOGIN
@@ -463,20 +475,50 @@ def compute_edge_and_kelly(p: float, odds: float) -> Tuple[float, float]:
 # AI FT 1X2 – APPLY
 # -------------------------------
 
-def apply_ai_model(pred_df: pd.DataFrame) -> pd.DataFrame:
+# -----------------------------------------
+# FT 1X2 – AI MODEL (LOCAL + GOOGLE DRIVE)
+# -----------------------------------------
+
+def load_ai_1x2_model():
+    """
+    Pokušaj:
+    1) uzeti model iz models/ai_1x2_model.pkl
+    2) ako ne postoji – skini ga sa Google Drive-a
+    3) ako ni to ne uspije – digni izuzetak
+    """
     model_path = os.path.join("models", "ai_1x2_model.pkl")
+
+    # 1) Ako već postoji lokalno – koristi to
     if not os.path.exists(model_path):
+        try:
+            # 2) ako ne postoji, skidamo s Google Drive-a
+            download_from_gdrive(GDRIVE_ID_AI_1X2, model_path)
+        except Exception as e:
+            print("[ERR] Cannot download AI 1X2 model from GDrive:", e)
+            raise
+
+    artifact = joblib.load(model_path)
+    return artifact["model"], artifact["feature_cols"]
+
+
+def apply_ai_model(pred_df: pd.DataFrame) -> pd.DataFrame:
+    if pred_df.empty:
+        return pred_df
+
+    # Pokušaj učitati model; ako ne uspije – samo vrati NaN stupce
+    try:
+        model, feature_cols = load_ai_1x2_model()
+    except Exception as e:
+        print("[WARN] AI 1X2 model not available, using NaN probabilities:", e)
+        pred_df = pred_df.copy()
         pred_df["ai_p_home"] = np.nan
         pred_df["ai_p_draw"] = np.nan
         pred_df["ai_p_away"] = np.nan
         return pred_df
 
-    artifact = joblib.load(model_path)
-    model = artifact["model"]
-    feature_cols = artifact["feature_cols"]
-
     df = pred_df.copy()
 
+    # Osiguraj da odds kolone postoje
     if "B365H" not in df.columns and "book_home" in df.columns:
         df["B365H"] = df["book_home"]
     if "B365D" not in df.columns and "book_draw" in df.columns:
@@ -484,15 +526,19 @@ def apply_ai_model(pred_df: pd.DataFrame) -> pd.DataFrame:
     if "B365A" not in df.columns and "book_away" in df.columns:
         df["B365A"] = df["book_away"]
 
+    # Feature matrica
     X = df.reindex(columns=feature_cols, fill_value=0.0)
-    prob_matrix = model.predict_proba(X)
 
+    # Predikcije
+    prob_matrix = model.predict_proba(X)
     class_to_index = {cls: idx for idx, cls in enumerate(model.classes_)}
+
     df["ai_p_home"] = prob_matrix[:, class_to_index[0]]
     df["ai_p_draw"] = prob_matrix[:, class_to_index[1]]
     df["ai_p_away"] = prob_matrix[:, class_to_index[2]]
 
     return df
+
 
 
 # -------------------------------
@@ -632,17 +678,43 @@ def train_ai_goals_models(df_all: pd.DataFrame) -> None:
     print("[OK] Goals AI models saved to models/ai_goals_models.pkl")
 
 
+# -----------------------------------------
+# GOALS – AI MODELI (OU 2.5, BTTS, TOTAL GOALS)
+# -----------------------------------------
+
 def ensure_ai_goals_models(df_all: pd.DataFrame) -> None:
+    """
+    Na Streamlitu:
+    1) prvo pokušaj skinuti goals model s Google Drive-a
+    2) ako ne uspije – fallback: treniraj lokalno (može biti sporo)
+    """
     model_path = os.path.join("models", "ai_goals_models.pkl")
     if os.path.exists(model_path):
         return
-    print("[INFO] Goals models not found – training now...")
-    train_ai_goals_models(df_all)
+
+    try:
+        print("[INFO] Downloading AI goals models from Google Drive...")
+        download_from_gdrive(GDRIVE_ID_AI_GOALS, model_path)
+        return
+    except Exception as e:
+        print("[WARN] Cannot download AI goals models, training locally:", e)
+        # Ako baš ništa – onda treniraj (lokalno OK, u cloudu može biti sporo)
+        train_ai_goals_models(df_all)
 
 
 def apply_ai_goals(pred_df: pd.DataFrame) -> pd.DataFrame:
+    if pred_df.empty:
+        return pred_df
+
     model_path = os.path.join("models", "ai_goals_models.pkl")
     if not os.path.exists(model_path):
+        # Pokušaj osigurati model (download ili trening)
+        ensure_ai_goals_models(pred_df.assign(FTHG=np.nan, FTAG=np.nan))
+
+    if not os.path.exists(model_path):
+        # I dalje nema – digni NaN i nastavi
+        print("[WARN] AI goals model still not available, using NaN outputs.")
+        pred_df = pred_df.copy()
         pred_df["ai_p_over25"] = np.nan
         pred_df["ai_p_under25"] = np.nan
         pred_df["ai_p_btts_yes"] = np.nan
@@ -650,7 +722,18 @@ def apply_ai_goals(pred_df: pd.DataFrame) -> pd.DataFrame:
         pred_df["ai_total_goals"] = np.nan
         return pred_df
 
-    artifact = joblib.load(model_path)
+    try:
+        artifact = joblib.load(model_path)
+    except Exception as e:
+        print("[ERR] Failed to load AI goals model:", e)
+        pred_df = pred_df.copy()
+        pred_df["ai_p_over25"] = np.nan
+        pred_df["ai_p_under25"] = np.nan
+        pred_df["ai_p_btts_yes"] = np.nan
+        pred_df["ai_p_btts_no"] = np.nan
+        pred_df["ai_total_goals"] = np.nan
+        return pred_df
+
     feature_cols = artifact["feature_cols"]
     over_model = artifact["over25_model"]
     btts_model = artifact["btts_model"]
@@ -658,6 +741,7 @@ def apply_ai_goals(pred_df: pd.DataFrame) -> pd.DataFrame:
 
     df = pred_df.copy()
 
+    # Ako koristiš B365H/D/A u feature-ima, pobrini se da postoje
     if "B365H" not in df.columns and "book_home" in df.columns:
         df["B365H"] = df["book_home"]
     if "B365D" not in df.columns and "book_draw" in df.columns:
@@ -667,17 +751,21 @@ def apply_ai_goals(pred_df: pd.DataFrame) -> pd.DataFrame:
 
     X = df.reindex(columns=feature_cols, fill_value=0.0)
 
+    # OU 2.5
     prob_over = over_model.predict_proba(X)[:, 1]
     df["ai_p_over25"] = prob_over
     df["ai_p_under25"] = 1.0 - prob_over
 
+    # BTTS
     prob_btts = btts_model.predict_proba(X)[:, 1]
     df["ai_p_btts_yes"] = prob_btts
     df["ai_p_btts_no"] = 1.0 - prob_btts
 
+    # Total goals (regresija)
     df["ai_total_goals"] = goals_model.predict(X)
 
     return df
+
 
 
 # -------------------------------
