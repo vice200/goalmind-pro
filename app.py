@@ -853,20 +853,93 @@ def add_goal_value_columns(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
+def add_recommended_and_risk(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Dodaje dvije kolone:
+    - recommended_bet: tekst (npr. 'Home win (1)', 'Over 2.5', 'BTTS YES', 'No bet')
+    - risk_level: 'HIGH' / 'MEDIUM' / 'LOW' / 'NONE'
+    Logika: gleda najveći Kelly preko svih tržišta (1X2 + OU + BTTS).
+    """
+    df = df.copy()
 
-# -------------------------------
-# EXCEL – PRO FIXTURES STYLING
-# -------------------------------
+    # Osiguraj da sve Kelly kolone postoje
+    kelly_cols = [
+        "kelly_home", "kelly_draw", "kelly_away",
+        "kelly_ou25_ai", "kelly_btts_ai",
+    ]
+    for c in kelly_cols:
+        if c not in df.columns:
+            df[c] = 0.0
+        df[c] = df[c].fillna(0.0)
+
+    def row_logic(r):
+        # map tržišta na Kelly
+        k_map = {
+            "H": r.get("kelly_home", 0.0),
+            "D": r.get("kelly_draw", 0.0),
+            "A": r.get("kelly_away", 0.0),
+            "OU25": r.get("kelly_ou25_ai", 0.0),
+            "BTTS": r.get("kelly_btts_ai", 0.0),
+        }
+
+        # najbolji Kelly
+        best_key = max(k_map, key=lambda k: k_map[k])
+        best_k = k_map[best_key]
+
+        # ako nigdje nema pozitivnog Kellya → No bet
+        if best_k <= 0:
+            return pd.Series({"recommended_bet": "No bet", "risk_level": "NONE"})
+
+        # map u tekst za korisnika
+        if best_key == "H":
+            rec = "Home win (1)"
+        elif best_key == "D":
+            rec = "Draw (X)"
+        elif best_key == "A":
+            rec = "Away win (2)"
+        elif best_key == "OU25":
+            rec = "Over 2.5 goals"
+        elif best_key == "BTTS":
+            rec = "BTTS YES"
+        else:
+            rec = "No bet"
+
+        # risk level po jačini Kellya
+        if best_k >= 0.05:
+            risk = "HIGH"
+        elif best_k >= 0.03:
+            risk = "MEDIUM"
+        else:
+            risk = "LOW"
+
+        return pd.Series({"recommended_bet": rec, "risk_level": risk})
+
+    extra = df.apply(row_logic, axis=1)
+    df["recommended_bet"] = extra["recommended_bet"]
+    df["risk_level"] = extra["risk_level"]
+
+    return df
+
 
 def build_pro_fixtures_excel(fixtures_dashboard: pd.DataFrame, season: str) -> BytesIO:
+    """
+    Radi PRO Excel s:
+    - Fixtures_PRO sheet (sekcije, filteri, conditional formatting)
+    - Best_Bets sheet (samo value betovi)
+    - Info sheet (objašnjenja na engleskom)
+    """
     buffer_fix = BytesIO()
+
+    # Osiguraj da recommended_bet i risk_level postoje
+    fixtures_dashboard = add_recommended_and_risk(fixtures_dashboard)
+
     with pd.ExcelWriter(buffer_fix, engine="openpyxl") as writer:
-        # startrow=4 => row1 title, row2 subtitle, row3 section headers, row4 column headers
+        # 🔹 VAŽNO: startrow=3 → header ide u row 4
         fixtures_dashboard.to_excel(
             writer,
             sheet_name="Fixtures_PRO",
             index=False,
-            startrow=4
+            startrow=3
         )
 
         wb = writer.book
@@ -878,14 +951,14 @@ def build_pro_fixtures_excel(fixtures_dashboard: pd.DataFrame, season: str) -> B
         # Title (row 1)
         title_cell = ws["A1"]
         ws.merge_cells(f"A1:{last_col_letter}1")
-        title_cell.value = f"PRO Fixtures – Poisson + AI + Kelly ({season})"
+        title_cell.value = f"GOALMIND PRO – Fixtures (Poisson + AI + Kelly) {season}"
         title_cell.font = Font(bold=True, size=14)
         title_cell.alignment = Alignment(horizontal="center", vertical="center")
 
         # Subtitle (row 2)
         info_cell = ws["A2"]
         ws.merge_cells(f"A2:{last_col_letter}2")
-        info_cell.value = "λ, Poisson 1X2, AI 1X2, AI OU/BTTS, fair odds, edge & Kelly."
+        info_cell.value = "Expected goals (λ), Poisson & AI FT 1X2, AI goals (OU / BTTS), fair odds, edge & Kelly, recommended bet."
         info_cell.font = Font(size=10, italic=True)
         info_cell.alignment = Alignment(horizontal="center", vertical="center")
 
@@ -893,12 +966,14 @@ def build_pro_fixtures_excel(fixtures_dashboard: pd.DataFrame, season: str) -> B
 
         # SECTION HEADERS (row 3)
         section_row = 3
+        header_row = 4  # 🟢 Ovdje su nazivi kolona iz DataFrame-a
 
         def cols_for(names):
             return [col_names.index(n) + 1 for n in names if n in col_names]
 
         sections = [
             ("Match info", cols_for(["league", "match_date", "home", "away"])),
+            ("Signals", cols_for(["recommended_bet", "risk_level"])),
             ("Poisson FT 1X2", cols_for(["lambda_home", "lambda_away", "p_home", "p_draw", "p_away"])),
             ("AI FT 1X2", cols_for(["ai_p_home", "ai_p_draw", "ai_p_away"])),
             ("Poisson goals", cols_for(["p_over25_poi", "p_btts_poi"])),
@@ -929,8 +1004,7 @@ def build_pro_fixtures_excel(fixtures_dashboard: pd.DataFrame, season: str) -> B
             cell.fill = section_fill
             cell.alignment = Alignment(horizontal="center", vertical="center")
 
-        # Header styling (row 4)
-        header_row = 4
+        # Header styling (row 4 → pravi nazivi kolona)
         header_font = Font(bold=True)
         header_fill = PatternFill("solid", fgColor="CCCCCC")
         thin_border = Border(
@@ -948,14 +1022,20 @@ def build_pro_fixtures_excel(fixtures_dashboard: pd.DataFrame, season: str) -> B
             cell.alignment = Alignment(horizontal="center", vertical="center")
 
             col_letter = get_column_letter(col_idx)
+            header_name = col_names[col_idx - 1].lower()
+
             if col_letter in ["A", "B"]:
                 ws.column_dimensions[col_letter].width = 14
             elif col_letter in ["C", "D"]:
-                ws.column_dimensions[col_letter].width = 20
+                ws.column_dimensions[col_letter].width = 22
+            elif header_name in ["recommended_bet", "risk_level"]:
+                ws.column_dimensions[col_letter].width = 18
             else:
                 ws.column_dimensions[col_letter].width = 12
 
         last_row = ws.max_row
+
+        # Borders + alignment za sve podatke ispod headera
         for row_idx in range(header_row + 1, last_row + 1):
             for col_idx in range(1, max_col + 1):
                 cell = ws.cell(row=row_idx, column=col_idx)
@@ -963,28 +1043,161 @@ def build_pro_fixtures_excel(fixtures_dashboard: pd.DataFrame, season: str) -> B
                 if isinstance(cell.value, (int, float)):
                     cell.alignment = Alignment(horizontal="center", vertical="center")
 
-        ws.freeze_panes = ws["A5"]
+        # Freeze header + filter
+        ws.freeze_panes = ws["A5"]  # prva data row
+        ws.auto_filter.ref = f"A{header_row}:{last_col_letter}{last_row}"
 
-        # Conditional formatting – highlight edge & Kelly
+        # Conditional formatting – edges & Kelly
         edge_cols = [i + 1 for i, c in enumerate(col_names) if c.startswith("edge_")]
         kelly_cols = [i + 1 for i, c in enumerate(col_names) if c.startswith("kelly_")]
 
         green_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+        yellow_fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
 
+        # Edge >= 0.05 -> green
         for col_idx in edge_cols:
             col_letter = get_column_letter(col_idx)
-            rng = f"{col_letter}{header_row+1}:{col_letter}{last_row}"
+            rng = f"{col_letter}{header_row + 1}:{col_letter}{last_row}"
             ws.conditional_formatting.add(
                 rng,
                 CellIsRule(operator='greaterThanOrEqual', formula=['0.05'], fill=green_fill)
             )
+
+        # Kelly >= 0.03 -> green, Kelly 0.015–0.03 -> yellow
         for col_idx in kelly_cols:
             col_letter = get_column_letter(col_idx)
-            rng = f"{col_letter}{header_row+1}:{col_letter}{last_row}"
+            rng = f"{col_letter}{header_row + 1}:{col_letter}{last_row}"
             ws.conditional_formatting.add(
                 rng,
-                CellIsRule(operator='greaterThanOrEqual', formula=['0.02'], fill=green_fill)
+                CellIsRule(operator='greaterThanOrEqual', formula=['0.03'], fill=green_fill)
             )
+            ws.conditional_formatting.add(
+                rng,
+                CellIsRule(operator='between', formula=['0.015', '0.03'], fill=yellow_fill)
+            )
+
+        # ============== Best_Bets sheet ==============
+        best_bets = fixtures_dashboard[
+            (fixtures_dashboard["recommended_bet"] != "No bet") &
+            (fixtures_dashboard["risk_level"].isin(["HIGH", "MEDIUM", "LOW"]))
+        ].copy()
+
+        if not best_bets.empty:
+            risk_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "NONE": 0}
+            best_bets["risk_order"] = best_bets["risk_level"].map(risk_order)
+            kelly_cols_all = [c for c in best_bets.columns if c.startswith("kelly_")]
+            best_bets["max_kelly_any"] = best_bets[kelly_cols_all].max(axis=1)
+            best_bets = best_bets.sort_values(
+                by=["risk_order", "max_kelly_any"], ascending=[False, False]
+            )
+
+            cols_best = [
+                "league", "match_date", "home", "away",
+                "recommended_bet", "risk_level",
+                "p_home", "p_draw", "p_away",
+                "ai_p_home", "ai_p_draw", "ai_p_away",
+                "p_over25_poi", "ai_p_over25",
+                "p_btts_poi", "ai_p_btts_yes",
+                "book_home", "book_draw", "book_away",
+                "book_over25", "book_btts_yes",
+                "edge_home", "edge_draw", "edge_away",
+                "edge_ou25_ai", "edge_btts_ai",
+                "kelly_home", "kelly_draw", "kelly_away",
+                "kelly_ou25_ai", "kelly_btts_ai",
+            ]
+            cols_best = [c for c in cols_best if c in best_bets.columns]
+
+            best_bets[cols_best].to_excel(
+                writer,
+                sheet_name="Best_Bets",
+                index=False,
+                startrow=0
+            )
+
+            ws2 = writer.sheets["Best_Bets"]
+            max_col2 = len(cols_best)
+            last_col_letter2 = get_column_letter(max_col2)
+
+            header_font2 = Font(bold=True)
+            header_fill2 = PatternFill("solid", fgColor="D9E1F2")
+
+            for col_idx in range(1, max_col2 + 1):
+                cell = ws2.cell(row=1, column=col_idx)
+                cell.font = header_font2
+                cell.fill = header_fill2
+                cell.border = thin_border
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+
+                col_letter = get_column_letter(col_idx)
+                name = cols_best[col_idx - 1].lower()
+                if col_letter in ["A", "B"]:
+                    ws2.column_dimensions[col_letter].width = 14
+                elif col_letter in ["C", "D"]:
+                    ws2.column_dimensions[col_letter].width = 22
+                else:
+                    ws2.column_dimensions[col_letter].width = 12
+
+            last_row2 = ws2.max_row
+            for row_idx in range(2, last_row2 + 1):
+                for col_idx in range(1, max_col2 + 1):
+                    cell = ws2.cell(row=row_idx, column=col_idx)
+                    cell.border = thin_border
+                    if isinstance(cell.value, (int, float)):
+                        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+            ws2.auto_filter.ref = f"A1:{last_col_letter2}{last_row2}"
+            ws2.freeze_panes = ws2["A2"]
+
+        # ============== Info sheet ==============
+        ws3 = wb.create_sheet("Info")
+
+        ws3["A1"] = "GOALMIND PRO – Fixtures Excel"
+        ws3["A1"].font = Font(bold=True, size=14)
+        ws3["A3"] = "How to use this file:"
+        ws3["A3"].font = Font(bold=True)
+
+        ws3["A4"] = "- Sheet 'Fixtures_PRO': full fixtures table with Poisson, AI, odds, edge & Kelly and recommended bets."
+        ws3["A5"] = "- Sheet 'Best_Bets': filtered shortlist of highest quality value bets."
+        ws3["A6"] = "- Filters are already enabled on the header row – use them to filter by league, date, risk level, etc."
+        ws3["A7"] = "- Green cells in edge/Kelly columns = strong value. Yellow cells = medium value (more risk)."
+
+        ws3["A9"] = "Key columns:"
+        ws3["A9"].font = Font(bold=True)
+
+        explanations = [
+            ("league", "League name (e.g., Championship, League One, Ligue 2...)."),
+            ("match_date", "Match date (YYYY-MM-DD)."),
+            ("home / away", "Home and away team names."),
+            ("lambda_home / lambda_away", "Expected goals (xG-like Poisson λ) for each team."),
+            ("p_home / p_draw / p_away", "Poisson+Dixon-Coles probability for FT 1X2."),
+            ("ai_p_home / ai_p_draw / ai_p_away", "AI model probability for FT 1X2 (trained on multi-season data)."),
+            ("p_over25_poi", "Poisson probability that total goals ≥ 3 (Over 2.5)."),
+            ("p_btts_poi", "Poisson probability that both teams score (BTTS Yes)."),
+            ("ai_p_over25", "AI probability for Over 2.5 goals."),
+            ("ai_p_btts_yes", "AI probability for BTTS Yes."),
+            ("ai_total_goals", "AI expected total goals (regression model)."),
+            ("book_home / book_draw / book_away", "Market odds for FT 1X2 (B365 or similar)."),
+            ("book_over25", "Market odds for Over 2.5 goals."),
+            ("book_btts_yes", "Market odds for BTTS Yes."),
+            ("edge_*", "Value indicator: edge = p * odds - 1. If > 0, model sees value."),
+            ("kelly_*", "Kelly fraction for stake sizing. Typical use: stake = bank * Kelly * safety_factor."),
+            ("recommended_bet", "Model suggestion: e.g. 'HOME', 'AWAY', 'Over 2.5', 'BTTS YES', or 'No bet'."),
+            ("risk_level", "Risk profile of the recommended bet: LOW / MEDIUM / HIGH."),
+        ]
+
+        start_row = 11
+        ws3["A10"] = "Column"
+        ws3["B10"] = "Description"
+        ws3["A10"].font = Font(bold=True)
+        ws3["B10"].font = Font(bold=True)
+
+        for i, (col_name, desc) in enumerate(explanations):
+            r = start_row + i
+            ws3[f"A{r}"] = col_name
+            ws3[f"B{r}"] = desc
+
+        ws3.column_dimensions["A"].width = 22
+        ws3.column_dimensions["B"].width = 90
 
     buffer_fix.seek(0)
     return buffer_fix
@@ -994,32 +1207,49 @@ def build_pro_fixtures_excel(fixtures_dashboard: pd.DataFrame, season: str) -> B
 # ROI HELPER FOR BINARY MARKETS
 # -------------------------------
 
-def compute_roi_binary(df: pd.DataFrame, prob_col: str, odds_col: str, actual_col: str, edge_threshold: float = 0.0):
+def compute_roi_binary(
+    df: pd.DataFrame,
+    prob_col: str,
+    odds_col: str,
+    actual_col: str,
+    edge_threshold: float = 0.0
+):
     """
     ROI for binary market (OU or BTTS) with flat stake = 1 unit.
     We bet only where p * odds - 1 > edge_threshold.
+    Returns: (roi, number_of_bets)
     """
     d = df.copy()
+
+    # moramo imati vjerojatnost, kvotu i stvarni ishod (0/1)
     d = d[
         d[prob_col].notna()
         & d[odds_col].notna()
         & d[actual_col].notna()
     ]
+
     if d.empty:
         return np.nan, 0
 
+    # edge = p * odds - 1
     d["edge_tmp"] = d[prob_col] * d[odds_col] - 1.0
     d = d[d["edge_tmp"] > edge_threshold]
+
     if d.empty:
         return np.nan, 0
 
-    d["profit"] = np.where(d[actual_col] == 1, d[odds_col] - 1.0, -1.0)
+    # flat stake = 1
+    d["profit"] = np.where(
+        d[actual_col] == 1,
+        d[odds_col] - 1.0,  # pogodak
+        -1.0                # promašaj
+    )
 
     total_profit = d["profit"].sum()
     n_bets = d.shape[0]
     roi = total_profit / n_bets
-    return roi, n_bets
 
+    return roi, n_bets
 
 # -------------------------------
 # STREAMLIT APP
