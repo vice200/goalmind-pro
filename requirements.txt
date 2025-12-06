@@ -8,4 +8,3 @@ joblib
 beautifulsoup4
 lxml
 python-dateutil
-gdown

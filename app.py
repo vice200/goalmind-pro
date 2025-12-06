@@ -17,7 +17,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.formatting.rule import CellIsRule
 import glob
-import gdown
+
 # ============================
 # TEAM NAME NORMALIZATION + MAPPING
 # ============================
@@ -202,23 +202,6 @@ def load_team_mapping() -> dict:
     print(f"[OK] Loaded team mapping, rows: {len(mapping)}")
 
     return mapping
-
-
-
-
-# =========================
-# GOOGLE DRIVE – AI MODELI
-# =========================
-
-GDRIVE_ID_AI_1X2 = "1mgbkAo6p7vo9syYQpkV3uOgX_UsCwJ0i"
-GDRIVE_ID_AI_GOALS = "1KifFjTHCqD7_E64O0SZXxfkfMMiPGgpL"
-
-
-def download_from_gdrive(file_id, output_path):
-    """Download model file from Google Drive."""
-    url = f"https://drive.google.com/uc?id={file_id}"
-    gdown.download(url, output_path, quiet=False)
-
 
 # =========================
 # SIMPLE PASSWORD LOGIN
@@ -811,32 +794,36 @@ def compute_edge_and_kelly(p: float, odds: float) -> Tuple[float, float]:
 # =========================
 
 def load_ai_1x2_model():
+    """
+    Učita AI FT 1X2 model iz lokalne datoteke models/ai_1x2_model.pkl.
+
+    Nema više download s Google Drive-a – Streamlit Cloud očekuje da je .pkl
+    već u repo-u (folder models/).
+    """
     model_path = os.path.join("models", "ai_1x2_model.pkl")
 
     if not os.path.exists(model_path):
-        try:
-            download_from_gdrive(GDRIVE_ID_AI_1X2, model_path)
-        except Exception as e:
-            print("[ERR] Cannot download AI 1X2 model from GDrive:", e)
-            raise
+        print(f"[ERR] AI 1X2 model not found at {model_path}")
+        return None, None
 
     artifact = joblib.load(model_path)
     return artifact["model"], artifact["feature_cols"]
+
 
 
 def apply_ai_model(pred_df: pd.DataFrame) -> pd.DataFrame:
     if pred_df.empty:
         return pred_df
 
-    try:
-        model, feature_cols = load_ai_1x2_model()
-    except Exception as e:
-        print("[WARN] AI 1X2 model not available, using NaN probabilities:", e)
-        pred_df = pred_df.copy()
-        pred_df["ai_p_home"] = np.nan
-        pred_df["ai_p_draw"] = np.nan
-        pred_df["ai_p_away"] = np.nan
-        return pred_df
+    model, feature_cols = load_ai_1x2_model()
+    if model is None or feature_cols is None:
+        # nema modela – samo dodaj NaN i nastavi
+        print("[WARN] AI 1X2 model not available (no .pkl in models/) – ai_p_* = NaN")
+        d = pred_df.copy()
+        d["ai_p_home"] = np.nan
+        d["ai_p_draw"] = np.nan
+        d["ai_p_away"] = np.nan
+        return d
 
     df = pred_df.copy()
 
@@ -992,19 +979,20 @@ def train_ai_goals_models(df_all: pd.DataFrame) -> None:
     joblib.dump(artifact, os.path.join("models", "ai_goals_models.pkl"))
     print("[OK] Goals AI models saved to models/ai_goals_models.pkl")
 
-
 def ensure_ai_goals_models(df_all: pd.DataFrame) -> None:
+    """
+    Provjeri postoji li models/ai_goals_models.pkl.
+    Ako postoji – super.
+    Ako ne postoji – pokuša istrenirati lokalno iz df_all.
+    """
     model_path = os.path.join("models", "ai_goals_models.pkl")
     if os.path.exists(model_path):
+        print("[OK] AI goals models found locally.")
         return
 
-    try:
-        print("[INFO] Downloading AI goals models from Google Drive...")
-        download_from_gdrive(GDRIVE_ID_AI_GOALS, model_path)
-        return
-    except Exception as e:
-        print("[WARN] Cannot download AI goals models, training locally:", e)
-        train_ai_goals_models(df_all)
+    print("[INFO] ai_goals_models.pkl not found – training locally from historical data...")
+    train_ai_goals_models(df_all)
+
 
 
 def apply_ai_goals(pred_df: pd.DataFrame) -> pd.DataFrame:
