@@ -2,6 +2,9 @@ import pandas as pd
 import glob
 import os
 
+
+
+
 # Uvozimo tvoju funkciju iz app.py – već tamo postoji
 from app import load_all_leagues, DEFAULT_SEASON
 
